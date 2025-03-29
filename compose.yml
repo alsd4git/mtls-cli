@@ -1,0 +1,12 @@
+services:
+  step-ca:
+    image: smallstep/step-ca
+    container_name: step-ca
+    ports:
+      - "9001:9000"
+    volumes:
+      - ./step:/home/step
+    environment:
+      - DOCKER_STEPCA_INIT_NAME="Homelab CA"
+      - DOCKER_STEPCA_INIT_DNS_NAMES=localhost
+      - DOCKER_STEPCA_INIT_PASSWORD=your-secret-password
