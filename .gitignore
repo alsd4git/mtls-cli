@@ -1,3 +1,6 @@
 certs_output
+step
 roots.pem
 issued_passwords.csv
+.env
+*.before-renew.*

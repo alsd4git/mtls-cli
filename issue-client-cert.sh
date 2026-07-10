@@ -1,108 +1,75 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -e
+set -Eeuo pipefail
+umask 077
 
-# === BEFORE USE ===
-# 1. Make sure you have the Step CA CLI installed and configured.
-# 2. Ensure the Step CA is running and accessible at the specified CA_URL.
-# 3. Update the ROOT_CA path if your root CA certificate is located elsewhere.
-# 4. Make sure the OpenSSL CLI is installed.
-# 5. Ensure the zip utility is installed for creating the ZIP file.
-# 6. Make sure the script has execute permissions: chmod +x issue-client-cert.sh
-# 7. Extend certs max duration adding this to ca.json:
-#   	"authority": {
-#       "claims": {
-# 	      "maxTLSCertDuration": "8760h"
-#         },
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/cert-common.sh
+source "$SCRIPT_DIR/lib/cert-common.sh"
 
-# === CONFIGURATION ===
-CA_URL="https://localhost:9001" # as exposed in the step-ca docker container
-PROVISIONER="admin"             # Change if you use a different provisioner
-CERT_DURATION="8760h"           # 1 year
-OUT_DIR="./certs_output"        # Directory to save the certs
+usage() {
+  cat <<'EOF'
+Usage: ./issue-client-cert.sh [CLIENT_NAME]
 
-# Where to store the cached root cert
-ROOT_CA="./roots.pem"
+Issue a client certificate. With no CLIENT_NAME, the script prompts as before.
+Configuration can be overridden with CA_URL, PROVISIONER, CERT_DURATION,
+OUT_DIR, ROOT_CA, PASSWORD_LOG, and optionally CA_FINGERPRINT.
+EOF
+}
 
-# Download and cache the CA root certificate if not already present
-if [[ ! -f "$ROOT_CA" ]]; then
-  echo "[*] Downloading CA root certificate from $CA_URL/roots.pem..."
-  curl -s -k -L "$CA_URL/roots.pem" -o "$ROOT_CA"
-
-  if [[ $? -ne 0 || ! -s "$ROOT_CA" ]]; then
-    echo "❌ Failed to download or save root CA certificate."
-    exit 1
-  fi
-else
-  echo "✅ Root CA certificate already cached at $ROOT_CA"
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+  usage
+  exit 0
+fi
+if (( $# > 1 )); then
+  usage >&2
+  exit 2
 fi
 
+require_command step openssl zip curl
+ensure_root_ca
 
-# === GET CLIENT INFO ===
-read -rp "Enter client name (e.g. alice): " NAME
-CN="$NAME"
-P12_PASS=$(openssl rand -hex 12)
+name=${1:-}
+if [[ -z $name ]]; then
+  read -rp "Enter client name (e.g. alice): " name
+fi
+validate_client_name "$name"
 
-# === FILE PATHS ===
-CRT="$OUT_DIR/$NAME/$NAME.crt"
-KEY="$OUT_DIR/$NAME/$NAME.key"
-P12="$OUT_DIR/$NAME/$NAME.p12"
-ZIP="$OUT_DIR/$NAME/$NAME-certs.zip"
+client_dir="$OUT_DIR/$name"
+crt="$client_dir/$name.crt"
+key="$client_dir/$name.key"
+p12="$client_dir/$name.p12"
+archive="$client_dir/$name-certs.zip"
+mkdir -p "$client_dir"
 
-mkdir -p "$OUT_DIR"
-mkdir -p "$OUT_DIR/$NAME"
-
-if [[ -f "$CRT" || -f "$KEY" || -f "$P12" ]]; then
-  echo "⚠️ Files for '$NAME' already exist. Do you want to overwrite them? (y/N)"
-  read -r CONFIRM
-  [[ "$CONFIRM" == "y" ]] || exit 1
+if [[ -e $crt || -e $key || -e $p12 || -e $archive ]]; then
+  read -rp "⚠️ Files for '$name' already exist. Overwrite them? (y/N) " confirm
+  [[ $confirm =~ ^[Yy]$ ]] || exit 1
 fi
 
-
-# === ISSUE CERT ===
+p12_pass=$(openssl rand -hex 12)
 echo "[*] Requesting certificate from Step CA..."
-step ca certificate "$CN" "$CRT" "$KEY" \
+step ca certificate "$name" "$crt" "$key" \
   --not-after="$CERT_DURATION" \
   --provisioner "$PROVISIONER" \
   --ca-url "$CA_URL" \
   --root "$ROOT_CA"
 
-# === CONVERT TO .P12 ===
-echo "[*] Creating .p12 bundle..."
-openssl pkcs12 -export \
-  -in "$CRT" -inkey "$KEY" \
-  -out "$P12" \
-  -name "$NAME" \
-  -passout pass:"$P12_PASS" \
-  -certfile "$ROOT_CA"
+echo "[*] Creating protected .p12 and ZIP bundles..."
+package_client_certificate "$name" "$p12_pass"
+record_password "$name" "$p12_pass" issued
 
-# === ZIP AND INFO ===
-zip -j -P "$P12_PASS" "$ZIP" "$P12" "$CRT" "$KEY" "$ROOT_CA"
+echo
+echo "✅ Certificate created for '$name'"
+echo "   - P12 File: $p12"
+echo "   - Password: $p12_pass"
+echo "   - Bundle:   $archive"
+echo "   - Password log: $PASSWORD_LOG (plaintext by design, mode 0600)"
+echo
 
-# === SAVE ISSUED PASSWORD ===
-TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-echo "$NAME,$P12_PASS,$TIMESTAMP" >> issued_passwords.csv
-
-
-echo ""
-echo "✅ Certificate created for '$NAME'"
-echo "   - P12 File: $P12"
-echo "   - Password: $P12_PASS"
-echo "   - Bundle:   $ZIP"
-echo ""
-echo "📱 Send the ZIP to the user and give them the password."
-echo "🔐 They can import the .p12 on Android via Settings > Security > Credentials."
-
-
-echo ""
-read -rp "🌐 Press [S] to serve the certs folder over HTTP, or press [Enter] to finish: " RESP
-if [[ "$RESP" =~ ^[Ss]$ ]]; then
-  if [[ -x "./serve-certs.sh" ]]; then
-    ./serve-certs.sh
-  else
-    echo "⚠️ 'serve-certs.sh' not found or not executable."
-    echo "   → Make sure it's in the same folder and run: chmod +x serve-certs.sh"
-  fi
+read -rp "🌐 Press [S] to share only this bundle temporarily, or [Enter] to finish: " response
+if [[ $response =~ ^[Ss]$ ]]; then
+  "$SCRIPT_DIR/serve-certs.sh" "$archive"
 else
-  echo "✅ Done. Cert files are in: $OUT_DIR/$NAME"
+  echo "✅ Done. Cert files are in: $client_dir"
 fi
