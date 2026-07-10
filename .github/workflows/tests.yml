@@ -1,0 +1,22 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck zip unzip
+      - name: Check shell scripts
+        run: shellcheck ./*.sh ./lib/*.sh ./tests/*.sh
+      - name: Run certificate workflow tests
+        run: ./tests/run.sh
+      - name: Validate Docker Compose
+        env:
+          STEP_CA_PASSWORD: test-only
+        run: docker compose config --quiet
