@@ -14,10 +14,11 @@ Built on top of [Smallstep CA](https://smallstep.com/docs/step-ca) and optimized
 
 | Script/File                        | Description                                                              |
 |-----------------------------------|--------------------------------------------------------------------------|
-| `compose.yml`                     | Docker Compose setup for Step CA                                         |
+| `compose.yml`                     | Pinned, local-only-by-default Docker Compose setup for Step CA           |
 | `init_cli.sh`                     | Installs Step CLI, `zip`, and `qrencode` (optional)                      |
 | `issue-client-cert.sh`           | Generates 1-year client cert, `.p12`, zipped bundle, logs it             |
-| `serve-certs.sh`                 | Serves the certs via local HTTP + QR code (auto-expires)                 |
+| `cert-manager.sh`                | Inventory, renewal, and revocation commands                              |
+| `serve-certs.sh`                 | Serves one bundle via temporary HTTP + QR code                            |
 | `cert-recap.md`                  | Cheat sheet explaining `.crt`, `.p12`, `.key`, etc.                      |
 | `.gitignore`                     | Ignores secrets, output, and certs                                       |
 | `README_NPM.md`                  | Extra guide to use mTLS with Nginx Proxy Manager (NPM)                   |
@@ -37,10 +38,18 @@ Built on top of [Smallstep CA](https://smallstep.com/docs/step-ca) and optimized
 ### 0. Start your Step CA with Docker
 
 ```bash
+cp .env.example .env
+# Edit .env and replace STEP_CA_PASSWORD first.
 docker compose up -d
 ```
 
-Your CA will now be available at `https://localhost:9001`
+The version-pinned CA is available at `https://localhost:9001`. It binds to
+`127.0.0.1` by default, uses `no-new-privileges`, has an init process, and a
+graceful stop policy. Set `STEP_CA_BIND_ADDRESS=0.0.0.0` only when other LAN
+hosts must reach the CA, and protect that port with a firewall.
+
+The `./step` state directory and `.env` are ignored by Git. Back up the `step`
+directory securely: losing its keys means losing the CA.
 
 ---
 
@@ -63,14 +72,22 @@ This installs:
 ```bash
 chmod +x issue-client-cert.sh
 ./issue-client-cert.sh
+# Or non-interactively provide only the client name:
+./issue-client-cert.sh alice
 ```
 
 - Prompts for a username (e.g. `alice`)
 - Issues a 1-year client certificate
 - Bundles it into a `.p12` with a secure password
-- Zips all files into a ready-to-share `.zip`
+- Zips the P12 and public certificates into a ready-to-share `.zip`
 - Logs the password and timestamp to `issued_passwords.csv`
-- Optionally serves the bundle over HTTP with QR code
+- Optionally serves only that bundle over temporary HTTP with a QR code
+
+Client names are restricted to a path-safe character set. Configuration can be
+overridden with `CA_URL`, `PROVISIONER`, `CERT_DURATION`, `OUT_DIR`, `ROOT_CA`,
+and `PASSWORD_LOG`. Set `CA_FINGERPRINT` to bootstrap `roots.pem` with explicit
+fingerprint verification; without it, the script clearly warns before using the
+legacy local `curl --insecure` bootstrap.
 
 ---
 
@@ -83,10 +100,48 @@ certs_output/
       ├── alice.crt       # Public certificate
       ├── alice.key       # Private key
       ├── alice.p12       # Password-protected bundle
-      └── alice-certs.zip # Ready to share
+      └── alice-certs.zip # P12, public cert, and root CA; ready to share
 issued_passwords.csv       # Log of all issued certs and passwords
 roots.pem                  # Cached CA root
 ```
+
+`issued_passwords.csv` intentionally keeps plaintext passwords because this is
+part of this toolkit's operating workflow. The scripts preserve this behavior,
+set the file to mode `0600`, and append `issued`/`renewed` audit records. Protect
+and back up this file as sensitive data.
+
+The raw private key remains available locally but is no longer placed in the ZIP
+by default: password-protected ZIP encryption is not a strong substitute for the
+P12 container. Set `INCLUDE_RAW_KEY_IN_ZIP=true` only for a legacy recipient that
+explicitly needs the old archive layout.
+
+## 🔄 Certificate lifecycle
+
+List locally managed certificates, serials, expiration dates, and status:
+
+```bash
+./cert-manager.sh inventory
+```
+
+Renew a client certificate and rebuild its P12/ZIP with the latest recorded
+plaintext password:
+
+```bash
+./cert-manager.sh renew alice
+```
+
+The old certificate is retained as a timestamped `*.before-renew.*` backup. If
+renewal fails, it is restored automatically.
+
+Revoke a certificate using its own certificate/key pair:
+
+```bash
+./cert-manager.sh revoke alice "device lost"
+```
+
+Revocation prevents future renewal. Immediate rejection additionally requires
+the relying service to check a CRL or OCSP; simply configuring the root CA in a
+reverse proxy does not make active revocation automatic.
 
 ---
 
@@ -105,12 +160,32 @@ Want to quickly transfer certs to another device?
 
 ```bash
 ./serve-certs.sh
+# Or select a bundle explicitly:
+./serve-certs.sh certs_output/alice/alice-certs.zip
 ```
 
 This will:
-- Serve the `certs_output/` folder via HTTP
+- Serve only the selected ZIP (or the newest bundle when omitted)
 - Show a QR code to scan from another device on your LAN
 - Auto-stop the server after 5 minutes
+- Kill the HTTP process and verify removal of its temporary directory on exit,
+  expiry, Ctrl+C, or failure
+
+Override the lifetime with `EXPIRE_MINUTES`, the port with `PORT`, or IP
+detection with `SHARE_IP`. HTTP is intentionally suitable only for a trusted
+local network: the ZIP and P12 remain password-protected, but the raw transport
+is not encrypted.
+
+## 🧪 Validation
+
+The test suite uses a fake `step` command plus temporary, real OpenSSL
+certificates. It exercises validation, plaintext password reuse, inventory,
+renewal/repackaging, revocation arguments, single-file sharing, and cleanup:
+
+```bash
+./tests/run.sh
+STEP_CA_PASSWORD=test-only docker compose config --quiet
+```
 
 ---
 
