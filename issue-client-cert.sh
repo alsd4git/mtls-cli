@@ -13,7 +13,8 @@ Usage: ./issue-client-cert.sh [CLIENT_NAME]
 
 Issue a client certificate. With no CLIENT_NAME, the script prompts as before.
 Configuration can be overridden with CA_URL, PROVISIONER, CERT_DURATION,
-OUT_DIR, ROOT_CA, PASSWORD_LOG, and optionally CA_FINGERPRINT.
+OUT_DIR, ROOT_CA, and PASSWORD_LOG. CA_FINGERPRINT is required when CA_URL is
+not a loopback address and optional for a local CA.
 EOF
 }
 
@@ -26,8 +27,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 
-require_command step openssl zip curl
-ensure_root_ca
+require_command step openssl zip curl flock
 
 name=${1:-}
 if [[ -z $name ]]; then
@@ -40,10 +40,23 @@ crt="$client_dir/$name.crt"
 key="$client_dir/$name.key"
 p12="$client_dir/$name.p12"
 archive="$client_dir/$name-certs.zip"
+
+files_existed=false
+if [[ -e $crt || -e $key || -e $p12 || -e $archive ]]; then
+  files_existed=true
+  read -rp "⚠️ Files for '$name' already exist. Overwrite them? (y/N) " confirm
+  [[ $confirm =~ ^[Yy]$ ]] || exit 1
+fi
+
+acquire_lifecycle_lock
+trap release_lifecycle_lock EXIT
+ensure_root_ca
 mkdir -p "$client_dir"
 
-if [[ -e $crt || -e $key || -e $p12 || -e $archive ]]; then
-  read -rp "⚠️ Files for '$name' already exist. Overwrite them? (y/N) " confirm
+# Another issuer may have created these files while this process waited for the
+# lock. Never overwrite that work without a fresh confirmation.
+if [[ $files_existed == false ]] && [[ -e $crt || -e $key || -e $p12 || -e $archive ]]; then
+  read -rp "⚠️ Files for '$name' were created by another process. Overwrite them? (y/N) " confirm
   [[ $confirm =~ ^[Yy]$ ]] || exit 1
 fi
 
@@ -55,9 +68,11 @@ step ca certificate "$name" "$crt" "$key" \
   --ca-url "$CA_URL" \
   --root "$ROOT_CA"
 
-echo "[*] Creating protected .p12 and ZIP bundles..."
+echo "[*] Creating protected .p12 and shareable ZIP bundles..."
 package_client_certificate "$name" "$p12_pass"
 record_password "$name" "$p12_pass" issued
+release_lifecycle_lock
+trap - EXIT
 
 echo
 echo "✅ Certificate created for '$name'"

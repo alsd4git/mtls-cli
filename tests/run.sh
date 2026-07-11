@@ -32,6 +32,51 @@ fi
 printf 'alice,old,2026-01-01 00:00:00,issued\nalice,current,2026-02-01 00:00:00,renewed\n' >"$PASSWORD_LOG"
 [[ $(password_for_client alice) == current ]] || fail "latest plaintext password was not returned"
 
+concurrent_log="$temporary_dir/concurrent-passwords.csv"
+PASSWORD_LOG="$concurrent_log"
+for index in $(seq 1 20); do
+  record_password "client-$index" "password-$index" issued &
+done
+wait
+[[ $(wc -l <"$concurrent_log") -eq 20 ]] || fail "concurrent ledger writes lost records"
+awk -F, 'NF != 4 { exit 1 }' "$concurrent_log" \
+  || fail "concurrent ledger writes produced malformed records"
+
+echo "[2b/4] Rejecting remote CA bootstrap without a fingerprint"
+remote_root="$temporary_dir/remote-root.pem"
+if ROOT_CA="$remote_root" CA_URL=https://ca.example.test:9001 CA_FINGERPRINT='' ensure_root_ca 2>/dev/null; then
+  fail "remote CA bootstrap without a fingerprint was accepted"
+fi
+
+echo "[2c/4] Propagating packaging and password-ledger failures"
+failure_dir="$temporary_dir/package-failure"
+mkdir -p "$failure_dir/alice"
+OUT_DIR="$failure_dir"
+ROOT_CA="$failure_dir/root.pem"
+printf 'certificate' >"$failure_dir/alice/alice.crt"
+printf 'key' >"$failure_dir/alice/alice.key"
+printf 'root' >"$ROOT_CA"
+printf 'previous-p12' >"$failure_dir/alice/alice.p12"
+openssl() { return 42; }
+if package_client_certificate alice secret; then
+  fail "OpenSSL packaging failure was masked"
+fi
+unset -f openssl
+[[ $(cat "$failure_dir/alice/alice.p12") == previous-p12 ]] \
+  || fail "failed packaging replaced the previous P12"
+
+PASSWORD_LOG="$temporary_dir/locked-passwords.csv"
+ledger_lock="${PASSWORD_LOG}.lock"
+exec {test_lock_fd}>"$ledger_lock"
+flock "$test_lock_fd"
+LIFECYCLE_LOCK_TIMEOUT=0
+if record_password blocked secret issued 2>/dev/null; then
+  fail "password ledger lock timeout was masked"
+fi
+flock -u "$test_lock_fd"
+exec {test_lock_fd}>&-
+LIFECYCLE_LOCK_TIMEOUT=30
+
 echo "[3/4] Exercising inventory, renewal, and revocation with a fake CA command"
 export OUT_DIR="$temporary_dir/certs_output"
 export ROOT_CA="$temporary_dir/roots.pem"
@@ -62,6 +107,8 @@ PATH="$temporary_dir/bin:$PATH" "$REPO_DIR/cert-manager.sh" renew alice >/dev/nu
 if unzip -Z1 "$OUT_DIR/alice/alice-certs.zip" | grep -q 'alice.key'; then
   fail "raw private key was included in the default ZIP"
 fi
+unzip -t "$OUT_DIR/alice/alice-certs.zip" >/dev/null \
+  || fail "default ZIP should be readable without a redundant ZIP password"
 find "$OUT_DIR/alice" -name 'alice.crt.before-renew.*' -print -quit | grep -q . \
   || fail "renewal did not retain a certificate backup"
 tail -n1 "$PASSWORD_LOG" | grep -q ',renewed$' || fail "renewal was not recorded"

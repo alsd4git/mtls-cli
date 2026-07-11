@@ -65,8 +65,9 @@ inventory() {
 renew_client() {
   local name=$1
   validate_client_name "$name"
-  require_command step openssl zip
+  require_command step openssl zip flock
   require_client_files "$name"
+  acquire_lifecycle_lock
   [[ -s $ROOT_CA ]] || { echo "❌ Root CA not found: $ROOT_CA" >&2; return 1; }
 
   local password backup
@@ -96,8 +97,9 @@ renew_client() {
 revoke_client() {
   local name=$1 reason=${2:-Cessation of use}
   validate_client_name "$name"
-  require_command step
+  require_command step flock
   require_client_files "$name"
+  acquire_lifecycle_lock
   [[ -s $ROOT_CA ]] || { echo "❌ Root CA not found: $ROOT_CA" >&2; return 1; }
 
   step ca revoke \

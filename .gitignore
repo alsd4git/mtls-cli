@@ -2,5 +2,6 @@ certs_output
 step
 roots.pem
 issued_passwords.csv
+issued_passwords.csv.lock
 .env
 *.before-renew.*

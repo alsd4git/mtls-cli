@@ -10,6 +10,7 @@ CERT_DURATION=${CERT_DURATION:-8760h}
 OUT_DIR=${OUT_DIR:-$SCRIPT_DIR/certs_output}
 ROOT_CA=${ROOT_CA:-$SCRIPT_DIR/roots.pem}
 PASSWORD_LOG=${PASSWORD_LOG:-$SCRIPT_DIR/issued_passwords.csv}
+LIFECYCLE_LOCK_TIMEOUT=${LIFECYCLE_LOCK_TIMEOUT:-30}
 
 require_command() {
   local command_name
@@ -29,6 +30,28 @@ validate_client_name() {
   fi
 }
 
+is_loopback_ca_url() {
+  [[ $CA_URL =~ ^https?://(localhost|127([.][0-9]{1,3}){3}|\[::1\])(:[0-9]+)?(/|$) ]]
+}
+
+acquire_lifecycle_lock() {
+  mkdir -p "$OUT_DIR"
+  local lock_path="$OUT_DIR/.lifecycle.lock"
+  exec {LIFECYCLE_LOCK_FD}>"$lock_path"
+  if ! flock -w "$LIFECYCLE_LOCK_TIMEOUT" "$LIFECYCLE_LOCK_FD"; then
+    echo "❌ Timed out waiting for certificate lifecycle lock: $lock_path" >&2
+    return 1
+  fi
+}
+
+release_lifecycle_lock() {
+  if [[ -n ${LIFECYCLE_LOCK_FD:-} ]]; then
+    flock -u "$LIFECYCLE_LOCK_FD" || true
+    exec {LIFECYCLE_LOCK_FD}>&-
+    unset LIFECYCLE_LOCK_FD
+  fi
+}
+
 ensure_root_ca() {
   if [[ -s $ROOT_CA ]] && openssl x509 -in "$ROOT_CA" -noout >/dev/null 2>&1; then
     echo "✅ Root CA certificate already cached at $ROOT_CA"
@@ -43,6 +66,11 @@ ensure_root_ca() {
   if [[ -n ${CA_FINGERPRINT:-} ]]; then
     step ca root "$temporary_root" --ca-url "$CA_URL" --fingerprint "$CA_FINGERPRINT"
   else
+    if ! is_loopback_ca_url; then
+      rm -f -- "$temporary_root"
+      echo "❌ CA_FINGERPRINT is required when CA_URL is not loopback: $CA_URL" >&2
+      return 1
+    fi
     echo "⚠️ CA_FINGERPRINT is unset; bootstrapping the local CA root over TLS without verification." >&2
     curl --fail --silent --show-error --location --insecure \
       "$CA_URL/roots.pem" --output "$temporary_root"
@@ -66,10 +94,20 @@ password_for_client() {
 
 record_password() {
   local name=$1 password=$2 operation=${3:-issued}
-  local timestamp
+  local timestamp lock_path
   timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-  printf '%s,%s,%s,%s\n' "$name" "$password" "$timestamp" "$operation" >>"$PASSWORD_LOG"
-  chmod 0600 "$PASSWORD_LOG"
+  mkdir -p "$(dirname -- "$PASSWORD_LOG")"
+  lock_path="${PASSWORD_LOG}.lock"
+  if ! (
+    flock -w "$LIFECYCLE_LOCK_TIMEOUT" 9 || {
+      echo "❌ Timed out waiting for password ledger lock: $lock_path" >&2
+      exit 1
+    }
+    printf '%s,%s,%s,%s\n' "$name" "$password" "$timestamp" "$operation" >>"$PASSWORD_LOG"
+    chmod 0600 "$PASSWORD_LOG"
+  ) 9>"$lock_path"; then
+    return 1
+  fi
 }
 
 package_client_certificate() {
@@ -80,12 +118,23 @@ package_client_certificate() {
   local p12="$client_dir/$name.p12"
   local archive="$client_dir/$name-certs.zip"
 
-  openssl pkcs12 -export \
+  local password_fd
+  exec {password_fd}<<<"$password"
+  local temporary_p12="${p12}.tmp.$$"
+  rm -f -- "$temporary_p12"
+  if ! openssl pkcs12 -export \
     -in "$crt" -inkey "$key" \
-    -out "$p12" \
+    -out "$temporary_p12" \
     -name "$name" \
-    -passout "pass:$password" \
-    -certfile "$ROOT_CA"
+    -passout "fd:$password_fd" \
+    -certfile "$ROOT_CA"; then
+    exec {password_fd}<&-
+    rm -f -- "$temporary_p12"
+    return 1
+  fi
+  exec {password_fd}<&-
+  chmod 0600 "$temporary_p12"
+  mv -f -- "$temporary_p12" "$p12"
 
   local -a archive_files=("$p12" "$crt" "$ROOT_CA")
   if [[ ${INCLUDE_RAW_KEY_IN_ZIP:-false} == true ]]; then
@@ -94,6 +143,17 @@ package_client_certificate() {
   fi
 
   rm -f -- "$archive"
-  zip -j -q -P "$password" "$archive" "${archive_files[@]}"
+  if [[ ${LEGACY_ZIP_PASSWORD:-false} == true ]]; then
+    echo "⚠️ LEGACY_ZIP_PASSWORD=true uses weak ZipCrypto and exposes the password in the process list." >&2
+    if ! zip -j -q -P "$password" "$archive" "${archive_files[@]}"; then
+      rm -f -- "$archive"
+      return 1
+    fi
+  else
+    if ! zip -j -q "$archive" "${archive_files[@]}"; then
+      rm -f -- "$archive"
+      return 1
+    fi
+  fi
   chmod 0600 "$key" "$p12" "$archive"
 }

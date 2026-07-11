@@ -15,7 +15,7 @@ Built on top of [Smallstep CA](https://smallstep.com/docs/step-ca) and optimized
 | Script/File                        | Description                                                              |
 |-----------------------------------|--------------------------------------------------------------------------|
 | `compose.yml`                     | Pinned, local-only-by-default Docker Compose setup for Step CA           |
-| `init_cli.sh`                     | Installs Step CLI, `zip`, and `qrencode` (optional)                      |
+| `init_cli.sh`                     | Installs Step CLI, `zip`, `flock`, and `qrencode` (optional)             |
 | `issue-client-cert.sh`           | Generates 1-year client cert, `.p12`, zipped bundle, logs it             |
 | `cert-manager.sh`                | Inventory, renewal, and revocation commands                              |
 | `serve-certs.sh`                 | Serves one bundle via temporary HTTP + QR code                            |
@@ -63,6 +63,7 @@ chmod +x init_cli.sh
 This installs:
 - `step` (CLI for Step CA)
 - `zip` (for packaging certs)
+- `flock` from `util-linux` (for safe lifecycle and password-ledger locking)
 - `qrencode` (optional for sharing)
 
 ---
@@ -85,9 +86,10 @@ chmod +x issue-client-cert.sh
 
 Client names are restricted to a path-safe character set. Configuration can be
 overridden with `CA_URL`, `PROVISIONER`, `CERT_DURATION`, `OUT_DIR`, `ROOT_CA`,
-and `PASSWORD_LOG`. Set `CA_FINGERPRINT` to bootstrap `roots.pem` with explicit
-fingerprint verification; without it, the script clearly warns before using the
-legacy local `curl --insecure` bootstrap.
+and `PASSWORD_LOG`. For a non-loopback `CA_URL`, you must set `CA_FINGERPRINT`
+to bootstrap `roots.pem` with explicit fingerprint verification. For a loopback
+CA only, omitting it produces a warning and uses the legacy local
+`curl --insecure` bootstrap.
 
 ---
 
@@ -111,9 +113,11 @@ set the file to mode `0600`, and append `issued`/`renewed` audit records. Protec
 and back up this file as sensitive data.
 
 The raw private key remains available locally but is no longer placed in the ZIP
-by default: password-protected ZIP encryption is not a strong substitute for the
-P12 container. Set `INCLUDE_RAW_KEY_IN_ZIP=true` only for a legacy recipient that
-explicitly needs the old archive layout.
+by default. The ZIP itself is also unencrypted by default: it contains only the
+encrypted P12 and public certificates, while avoiding weak ZipCrypto and a
+password visible in the process list. Set `LEGACY_ZIP_PASSWORD=true` only for a
+legacy recipient that requires the previous ZIP password behavior, and
+`INCLUDE_RAW_KEY_IN_ZIP=true` only when the raw key is explicitly required.
 
 ## 🔄 Certificate lifecycle
 
@@ -173,8 +177,8 @@ This will:
 
 Override the lifetime with `EXPIRE_MINUTES`, the port with `PORT`, or IP
 detection with `SHARE_IP`. HTTP is intentionally suitable only for a trusted
-local network: the ZIP and P12 remain password-protected, but the raw transport
-is not encrypted.
+local network: the P12 remains password-protected, but the ZIP and raw transport
+are not encrypted.
 
 ## 🧪 Validation
 
