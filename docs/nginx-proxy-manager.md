@@ -1,4 +1,4 @@
-# 🔐 Using Client Certificates with Nginx Proxy Manager (NPM)
+# Using Client Certificates with Nginx Proxy Manager
 
 This guide shows how to configure **Nginx Proxy Manager** (NPM) to use **mutual TLS (mTLS)** authentication with client certificates generated using the `issue-client-cert.sh` script.
 

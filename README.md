@@ -1,4 +1,4 @@
-# 🔐 Homelab mTLS Certificate Issuer
+# 🔐 mtls-cli
 
 A simple toolkit to generate, package, and securely share long-lived **client certificates** for **mutual TLS (mTLS)** authentication — perfect for self-hosted services, homelabs, friends, family, or small teams.
 
@@ -21,7 +21,7 @@ Built on top of [Smallstep CA](https://smallstep.com/docs/step-ca) and optimized
 | `serve-certs.sh`                 | Serves one bundle via temporary HTTP + QR code                            |
 | `cert-recap.md`                  | Cheat sheet explaining `.crt`, `.p12`, `.key`, etc.                      |
 | `.gitignore`                     | Ignores secrets, output, and certs                                       |
-| `README_NPM.md`                  | Extra guide to use mTLS with Nginx Proxy Manager (NPM)                   |
+| `docs/nginx-proxy-manager.md`    | Extra guide to use mTLS with Nginx Proxy Manager (NPM)                   |
 | `roots.pem` *(generated)*        | Cached copy of the root certificate (created on first run)              |
 | `issued_passwords.csv` *(generated)* | Logs all issued certs and passwords (created by the script)           |
 
@@ -196,10 +196,15 @@ STEP_CA_PASSWORD=test-only docker compose config --quiet
 ## 🧠 Extras
 
 - `cert-recap.md` explains all the formats: `.crt`, `.key`, `.p12`, `.pem`, etc.
-- `README_NPM.md` contains Nginx Proxy Manager-specific setup for mTLS
+- [docs/nginx-proxy-manager.md](docs/nginx-proxy-manager.md) contains
+  Nginx Proxy Manager-specific setup for mTLS
 
 ---
 
 ## 💬 Feedback
 
 Got ideas or want to contribute? Open an issue or ping me!
+
+## License
+
+MIT. See [LICENSE](LICENSE).
