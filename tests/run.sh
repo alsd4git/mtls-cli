@@ -67,14 +67,14 @@ unset -f openssl
 
 PASSWORD_LOG="$temporary_dir/locked-passwords.csv"
 ledger_lock="${PASSWORD_LOG}.lock"
-exec {test_lock_fd}>"$ledger_lock"
-flock "$test_lock_fd"
+mkdir "$ledger_lock"
+printf '%s:test-lock\n' "$$" >"$ledger_lock/owner"
 LIFECYCLE_LOCK_TIMEOUT=0
 if record_password blocked secret issued 2>/dev/null; then
   fail "password ledger lock timeout was masked"
 fi
-flock -u "$test_lock_fd"
-exec {test_lock_fd}>&-
+rm "$ledger_lock/owner"
+rmdir "$ledger_lock"
 LIFECYCLE_LOCK_TIMEOUT=30
 
 echo "[3/4] Exercising inventory, renewal, and revocation with a fake CA command"
@@ -120,7 +120,8 @@ grep -q 'ca revoke .*--reason device retired' "$STEP_TEST_LOG" || fail "step rev
 printf '\n' | PATH="$temporary_dir/bin:$PATH" "$REPO_DIR/issue-client-cert.sh" bob >/dev/null
 [[ -s $OUT_DIR/bob/bob-certs.zip ]] || fail "issuance did not create a ZIP"
 grep -q '^bob,[0-9a-f]\{24\},.*,issued$' "$PASSWORD_LOG" || fail "issued plaintext password was not recorded"
-[[ $(stat -c '%a' "$PASSWORD_LOG") == 600 ]] || fail "password log mode is not 0600"
+password_log_mode=$(stat -c '%a' "$PASSWORD_LOG" 2>/dev/null || stat -f '%Lp' "$PASSWORD_LOG")
+[[ $password_log_mode == 600 ]] || fail "password log mode is not 0600"
 
 echo "[4/4] Checking temporary single-file sharing and verified cleanup"
 share_parent="$temporary_dir/shares"

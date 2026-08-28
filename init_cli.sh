@@ -31,21 +31,12 @@ install_step_cli() (
 echo "🔍 Checking required tools..."
 need_apt_update=false
 install_zip=false
-install_util_linux=false
 install_qrencode=false
 
 if ! command -v step >/dev/null 2>&1; then
   install_step_cli
 else
   echo "✅ step-cli already installed: $(step version 2>/dev/null | head -n1)"
-fi
-
-if ! command -v flock >/dev/null 2>&1; then
-  echo "📦 flock not found. util-linux will be installed."
-  need_apt_update=true
-  install_util_linux=true
-else
-  echo "✅ flock already installed."
 fi
 
 if ! command -v zip >/dev/null 2>&1; then
@@ -70,7 +61,6 @@ if $need_apt_update; then
   sudo apt-get update
 fi
 $install_zip && sudo apt-get install -y zip
-$install_util_linux && sudo apt-get install -y util-linux
 $install_qrencode && sudo apt-get install -y qrencode
 
 echo "🎉 CLI tools are ready."

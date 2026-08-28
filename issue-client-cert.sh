@@ -27,7 +27,7 @@ if (( $# > 1 )); then
   exit 2
 fi
 
-require_command step openssl zip curl flock
+require_command step openssl zip curl
 
 name=${1:-}
 if [[ -z $name ]]; then

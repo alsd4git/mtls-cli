@@ -23,13 +23,19 @@ it:
 ## Requirements
 
 - Docker with Compose
-- Bash on Linux
-- `step`, OpenSSL, `zip`, `unzip`, and `flock`
+- Bash on Linux or macOS
+- `step`, OpenSSL, `zip`, and `unzip`
 - optional: `qrencode` for terminal QR codes
 
-`./init_cli.sh` installs the command-line dependencies on supported Linux
-systems. The project relies on POSIX permissions and `flock`, so macOS and
-Windows are not supported execution targets.
+`./init_cli.sh` installs the command-line dependencies on Debian-based Linux
+systems. On macOS, install them with Homebrew:
+
+```bash
+brew install smallstep zip
+```
+
+The scripts use atomic directory locks supported by both Linux and macOS.
+Windows is not a supported execution target.
 
 ## Start the certificate authority
 

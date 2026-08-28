@@ -36,19 +36,55 @@ is_loopback_ca_url() {
 
 acquire_lifecycle_lock() {
   mkdir -p "$OUT_DIR"
-  local lock_path="$OUT_DIR/.lifecycle.lock"
-  exec {LIFECYCLE_LOCK_FD}>"$lock_path"
-  if ! flock -w "$LIFECYCLE_LOCK_TIMEOUT" "$LIFECYCLE_LOCK_FD"; then
-    echo "❌ Timed out waiting for certificate lifecycle lock: $lock_path" >&2
-    return 1
-  fi
+  LIFECYCLE_LOCK_PATH="$OUT_DIR/.lifecycle.lock"
+  acquire_directory_lock "$LIFECYCLE_LOCK_PATH" "certificate lifecycle" || return 1
+  LIFECYCLE_LOCK_TOKEN=$ACQUIRED_LOCK_TOKEN
 }
 
 release_lifecycle_lock() {
-  if [[ -n ${LIFECYCLE_LOCK_FD:-} ]]; then
-    flock -u "$LIFECYCLE_LOCK_FD" || true
-    exec {LIFECYCLE_LOCK_FD}>&-
-    unset LIFECYCLE_LOCK_FD
+  if [[ -n ${LIFECYCLE_LOCK_PATH:-} ]]; then
+    release_directory_lock "$LIFECYCLE_LOCK_PATH" "$LIFECYCLE_LOCK_TOKEN"
+    unset LIFECYCLE_LOCK_PATH
+    unset LIFECYCLE_LOCK_TOKEN
+  fi
+}
+
+acquire_directory_lock() {
+  local lock_path=$1 description=$2
+  local started=$SECONDS owner owner_pid stale_path
+  local token="$$.$RANDOM.$RANDOM"
+
+  while ! mkdir "$lock_path" 2>/dev/null; do
+    if [[ -f $lock_path/owner ]]; then
+      owner=$(cat "$lock_path/owner" 2>/dev/null) || continue
+      owner_pid=${owner%%:*}
+      if [[ $owner_pid =~ ^[0-9]+$ ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+        stale_path="${lock_path}.stale.$$"
+        if mv "$lock_path" "$stale_path" 2>/dev/null; then
+          rm -f -- "$stale_path/owner"
+          rmdir "$stale_path" 2>/dev/null || true
+          continue
+        fi
+      fi
+    fi
+
+    if ((SECONDS - started >= LIFECYCLE_LOCK_TIMEOUT)); then
+      echo "❌ Timed out waiting for $description lock: $lock_path" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  printf '%s:%s\n' "$$" "$token" >"$lock_path/owner"
+  ACQUIRED_LOCK_TOKEN=$token
+}
+
+release_directory_lock() {
+  local lock_path=$1 token=$2 owner=''
+  [[ -f $lock_path/owner ]] && owner=$(cat "$lock_path/owner" 2>/dev/null || true)
+  if [[ $owner == "$$:$token" ]]; then
+    rm -f -- "$lock_path/owner"
+    rmdir "$lock_path" 2>/dev/null || true
   fi
 }
 
@@ -98,16 +134,13 @@ record_password() {
   timestamp=$(date '+%Y-%m-%d %H:%M:%S')
   mkdir -p "$(dirname -- "$PASSWORD_LOG")"
   lock_path="${PASSWORD_LOG}.lock"
-  if ! (
-    flock -w "$LIFECYCLE_LOCK_TIMEOUT" 9 || {
-      echo "❌ Timed out waiting for password ledger lock: $lock_path" >&2
-      exit 1
-    }
+  (
+    acquire_directory_lock "$lock_path" "password ledger" || exit 1
+    lock_token=$ACQUIRED_LOCK_TOKEN
+    trap 'release_directory_lock "$lock_path" "$lock_token"' EXIT
     printf '%s,%s,%s,%s\n' "$name" "$password" "$timestamp" "$operation" >>"$PASSWORD_LOG"
     chmod 0600 "$PASSWORD_LOG"
-  ) 9>"$lock_path"; then
-    return 1
-  fi
+  )
 }
 
 package_client_certificate() {
@@ -118,21 +151,20 @@ package_client_certificate() {
   local p12="$client_dir/$name.p12"
   local archive="$client_dir/$name-certs.zip"
 
-  local password_fd
-  exec {password_fd}<<<"$password"
   local temporary_p12="${p12}.tmp.$$"
   rm -f -- "$temporary_p12"
+  exec 8<<<"$password"
   if ! openssl pkcs12 -export \
     -in "$crt" -inkey "$key" \
     -out "$temporary_p12" \
     -name "$name" \
-    -passout "fd:$password_fd" \
+    -passout fd:8 \
     -certfile "$ROOT_CA"; then
-    exec {password_fd}<&-
+    exec 8<&-
     rm -f -- "$temporary_p12"
     return 1
   fi
-  exec {password_fd}<&-
+  exec 8<&-
   chmod 0600 "$temporary_p12"
   mv -f -- "$temporary_p12" "$p12"
 
