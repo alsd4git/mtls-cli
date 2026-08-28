@@ -1,5 +1,9 @@
 # mtls-cli
 
+[![CI](https://github.com/alsd4git/mtls-cli/actions/workflows/tests.yml/badge.svg)](https://github.com/alsd4git/mtls-cli/actions/workflows/tests.yml)
+[![Latest release](https://img.shields.io/github/v/release/alsd4git/mtls-cli)](https://github.com/alsd4git/mtls-cli/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
 Issue, renew, revoke, package, and share client certificates for mutual TLS.
 The toolkit runs a pinned Smallstep CA with Docker Compose and uses the `step`
 CLI for certificate operations.
