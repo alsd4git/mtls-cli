@@ -8,6 +8,46 @@ Issue, renew, revoke, package, and share client certificates for mutual TLS.
 The toolkit runs a pinned Smallstep CA with Docker Compose and uses the `step`
 CLI for certificate operations.
 
+## Quick start
+
+Install the [requirements](#requirements), then start a local CA:
+
+```bash
+cp .env.example .env
+# Set a strong STEP_CA_PASSWORD in .env
+docker compose up -d
+docker compose logs --follow step-ca
+```
+
+On the first run, initialization takes time. Wait for the logs to report that
+the CA server is listening, then press Ctrl-C to stop following the logs.
+The container keeps running. Issue a client certificate and inspect the inventory:
+
+```bash
+./issue-client-cert.sh laptop
+./cert-manager.sh inventory
+```
+
+The issue command creates a certificate, private key, PKCS#12 bundle, and ZIP
+under `certs_output/laptop/`. The ZIP contains private-key material inside the
+password-protected PKCS#12 bundle. Only the separate raw PEM key file is excluded
+unless you explicitly enable `INCLUDE_RAW_KEY_IN_ZIP=true`. Treat both the ZIP
+and its password as sensitive.
+
+```mermaid
+flowchart LR
+    A[Local Smallstep CA] -->|issue| B[Client identity]
+    B --> C[PEM certificate and key]
+    B --> D[PKCS#12 bundle]
+    D --> E[Optional ZIP for transfer]
+```
+
+This diagram shows the local packaging workflow. The default Compose deployment
+does not configure active revocation checking or a CRL endpoint, and open-source
+step-ca does not provide OCSP. Do not assume that revoking a certificate makes
+an already issued certificate unusable at relying services before expiry.
+See [Smallstep's production guidance](https://smallstep.com/docs/step-ca/certificate-authority-server-production/).
+
 ## Security model
 
 This project manages private keys and passwords. Read these points before using
@@ -21,8 +61,8 @@ it:
 - generated ZIP files contain the encrypted PKCS#12 bundle and public
   certificates. They are not encrypted themselves.
 - the temporary HTTP server is suitable only for a trusted local network.
-- certificate revocation takes effect only when the relying service checks CRL
-  or OCSP status.
+- the default deployment does not distribute active revocation status. Existing
+  certificates can remain usable at relying services until expiry.
 
 ## Requirements
 
