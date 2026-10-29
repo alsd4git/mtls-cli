@@ -8,6 +8,34 @@ Issue, renew, revoke, package, and share client certificates for mutual TLS.
 The toolkit runs a pinned Smallstep CA with Docker Compose and uses the `step`
 CLI for certificate operations.
 
+## Quick start
+
+Start a local CA, issue a client certificate, and inspect the local inventory:
+
+```bash
+cp .env.example .env
+# Set a strong STEP_CA_PASSWORD in .env
+docker compose up -d
+./issue-client-cert.sh laptop
+./cert-manager.sh inventory
+```
+
+The issue command creates a certificate, private key, PKCS#12 bundle, and ZIP
+under `certs_output/laptop/`. The private key stays out of the ZIP unless you
+explicitly enable `INCLUDE_RAW_KEY_IN_ZIP=true`.
+
+```mermaid
+flowchart LR
+    A[Local Smallstep CA] -->|issue| B[Client identity]
+    B --> C[PEM certificate and key]
+    B --> D[PKCS#12 bundle]
+    D --> E[Optional ZIP for transfer]
+    A --> F[CRL and OCSP status]
+```
+
+This diagram shows the local workflow. Revocation is effective only when the
+service using the certificate checks CRL or OCSP status.
+
 ## Security model
 
 This project manages private keys and passwords. Read these points before using
