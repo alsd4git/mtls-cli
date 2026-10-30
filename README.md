@@ -38,12 +38,14 @@ and its password as sensitive.
 flowchart TD
     subgraph Local[Private operator machine]
         CA["Smallstep CA: private state in ./step"]
-        PEM["Public PEM certificate + secret client private key"]
+        CERT["Public PEM client certificate"]
+        KEY["Secret client private key: generated locally by step CLI"]
         CSV["issued_passwords.csv: plaintext passwords, mode 0600"]
         P12["Password-protected PKCS#12: certificate + private key"]
         ZIP["ZIP: protected PKCS#12 + public CA/client certificates"]
-        CA -->|issue or renew| PEM
-        PEM -->|package| P12
+        CA -->|sign or renew certificate| CERT
+        CERT -->|package| P12
+        KEY -->|package locally| P12
         CSV -->|password for packaging| P12
         P12 --> ZIP
     end
@@ -55,7 +57,9 @@ flowchart TD
     REVOKED -.->|early rejection requires service-side CRL/OCSP checks| SERVICE
 ```
 
-In text: the local CA issues a public certificate and private client key.
+In text: the `step` CLI generates the client private key on the operator's
+machine and requests a signed public certificate from the CA. The CA does not
+receive or generate the client private key.
 `cert-manager.sh renew CLIENT_NAME` renews the certificate in place and rebuilds
 the PKCS#12 and ZIP using the latest password in the local plaintext log.
 The ZIP is not itself encrypted: its PKCS#12 is password-protected. Deliver the
