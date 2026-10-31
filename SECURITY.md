@@ -6,8 +6,9 @@ Use [GitHub private vulnerability reporting](https://github.com/alsd4git/mtls-cl
 Do not disclose exploit details or sensitive data in public issues or pull requests.
 
 Include the affected commit or version, expected impact and minimal reproduction
-steps. Use synthetic examples and redact screenshots and logs. If a credential
-has been exposed, revoke or rotate it before sharing details.
+steps. Use synthetic examples and redact screenshots and logs. If your own
+credential was exposed, revoke or rotate it. Report credentials you do not control
+promptly and privately; do not use or attempt to revoke them.
 
 ## Versions and maintenance
 
